@@ -1,0 +1,92 @@
+version: "3"
+
+services:
+  db:
+    image: postgres:13
+    environment:
+      - POSTGRES_USER=sonar
+      - POSTGRES_PASSWORD=sonar
+      - POSTGRES_DB=sonarqube
+    networks:
+      - sonar-network
+  
+  sonarqube:
+    image: sonarqube:lts-community
+    container_name: sonarqube
+    ports:
+      - "9000:9000"
+    environment:
+      - SONAR_JDBC_URL=jdbc:postgresql://db:5432/sonarqube
+      - SONAR_JDBC_USERNAME=sonar
+      - SONAR_JDBC_PASSWORD=sonar
+      - SONAR_FORCE_BUILTIN_PLUGINS=false
+    networks:
+      - sonar-network
+    depends_on:
+      - db
+
+  pylint-flake8:
+    image: python:3.11-slim
+    volumes:
+      - ./backend:/usr/src
+      - ./reports:/reports
+    command: >
+      sh -c "
+      apt-get update && apt-get install -y python3 python3-pip &&
+      pip3 install --no-cache-dir pylint flake8 &&
+      mkdir -p /reports &&
+      pylint --output-format=json /usr/src/**/*.py > /reports/pylint-report.json || true &&
+      flake8 --format=json /usr/src > /reports/flake8-report.json || true"
+
+  sonar-scanner:
+    image: sonarsource/sonar-scanner-cli
+    depends_on:
+      - sonarqube
+    environment:
+      - SONAR_HOST_URL=http://sonarqube:9000
+    volumes:
+      - ./backend:/usr/src
+      - ./reports:/reports
+    command: >
+      sonar-scanner
+      -Dsonar.projectKey=DarkMaze
+      -Dsonar.sources=/usr/src
+      -Dsonar.inclusions=**
+      -Dsonar.host.url=http://sonarqube:9000
+      -Dsonar.login=${SONAR_TOKEN}
+      -Dsonar.language=py
+      -Dsonar.python.version=3
+      -Dsonar.python.pylint.reportPaths=/reports/pylint-report.json
+      -Dsonar.python.flake8.reportPaths=/reports/flake8-report.json
+      -Dsonar.qualitygate.wait=true
+    networks:
+      - sonar-network
+
+  backend:
+    build: ./backend
+    volumes:
+      - ./backend/src:/app/src
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+    networks:
+      - sonar-network
+    restart: always
+    command: uvicorn src.main:app --host "0.0.0.0" --port 8000 --reload
+
+  frontend:
+    build: ./frontend
+    volumes:
+      - ./frontend/src:/app/src
+    ports:
+      - "8088:8088"
+    depends_on:
+      - backend
+    networks:
+      - sonar-network
+    restart: always
+    command: uvicorn src.main:app --host "0.0.0.0" --port 8088 --reload
+    
+networks:
+  sonar-network:
